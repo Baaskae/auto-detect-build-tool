@@ -1,0 +1,103 @@
+name: Auto-Detect Best Container Build Tool
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      image_control_preference:
+        description: 'Image Control Preference'
+        required: true
+        default: 'fine_grained'
+        type: choice
+        options:
+          - fine_grained
+          - easy_setup
+      security_level:
+        description: 'Security Criticality Level (moderate/high)'
+        required: true
+        default: 'moderate'
+        type: choice
+        options:
+          - moderate
+          - high
+      kubernetes_env:
+        description: 'Kubernetes-based Environment (true/false)'
+        required: true
+        default: 'false'
+        type: boolean
+      frequent_rebuild:
+        description: 'Frequent Rebuilding Without Clean Artifacts (true/false)'
+        required: true
+        default: 'false'
+        type: boolean
+
+jobs:
+  detect-build-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Detect Programming Language
+        id: detect_lang
+        run: |
+          detect_language() {
+              JS_COUNT=$(grep -r "function\|const\|let" . | wc -l)
+              PY_COUNT=$(grep -r "import \|def \|class " . | wc -l)
+              JAVA_COUNT=$(grep -r "public class\|import java" . | wc -l)
+              GO_COUNT=$(grep -r "package main\|func " . | wc -l)
+              RUST_COUNT=$(grep -r "fn " . | wc -l)
+              RUBY_COUNT=$(grep -r "def \|require 'rails'" . | wc -l)
+              CPP_COUNT=$(grep -r "#include " . | wc -l)
+
+              MAX=$(echo -e "$JS_COUNT javascript\n$PY_COUNT python\n$JAVA_COUNT java\n$GO_COUNT go\n$RUST_COUNT rust\n$RUBY_COUNT ruby\n$CPP_COUNT cpp" | sort -nr | head -n 1 | awk '{print $2}')
+              echo "$MAX"
+          }
+
+          LANGUAGE=$(detect_language)
+          echo "Detected programming language: $LANGUAGE"
+          echo "lang=$LANGUAGE" >> $GITHUB_ENV
+
+      - name: Select Container Build Tool
+        id: select_tool
+        run: |
+          TOOL=""
+
+          if [[ "${{ inputs.security_level }}" == "moderate" ]]; then
+            if [[ "${{ inputs.image_control_preference }}" == "fine_grained" ]]; then
+              if [[ "${{ inputs.frequent_rebuild }}" == "true" ]]; then
+                TOOL="BuildKit"
+              elif [[ "${{ env.k8s }}" == "true" ]]; then
+                TOOL="Kaniko"
+              else
+                TOOL="Docker Build"
+              fi
+            else
+              if [[ "${{ env.lang }}" == "java" ]]; then
+                TOOL="Jib"
+              else
+                TOOL="Buildpacks"
+              fi
+            fi
+          else
+            if [[ "${{ inputs.image_control_preference }}" == "fine_grained" ]]; then
+              TOOL="Podman"
+            else
+              if [[ "${{ env.lang }}" == "java" ]]; then
+                TOOL="Jib"
+              else
+                TOOL="Buildpacks"
+              fi
+            fi
+          fi
+
+          echo "Recommended Tool: $TOOL"
+          echo "tool=$TOOL" >> $GITHUB_ENV
+
+      - name: Output Selected Tool
+        run: echo "The best container build tool is ${{ env.tool }}"
